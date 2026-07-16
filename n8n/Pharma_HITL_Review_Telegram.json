@@ -1,0 +1,392 @@
+{
+  "name": "Pharma HITL Review — Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## HITL Entity Review via Telegram\n\n**What it does:** serves uncertain entity-resolution pairs from the `hitl_review_queue` data table to a reviewer on Telegram, one at a time, with Merge / Separate buttons. Decisions are written back and the next pair is sent automatically.\n\n### Setup (one time)\n1. Create a bot with **@BotFather**, copy the token\n2. Create a **Telegram API credential** in n8n with that token\n3. Attach the credential to the 3 Telegram nodes\n4. Activate the workflow\n5. Send **/review** to your bot to start\n\nQueue is pre-sorted by revenue impact — highest-stakes pairs come first. Price-based suggestions appear in the card when available.",
+        "height": 360,
+        "width": 460
+      },
+      "id": "note1",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        -416
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "trg",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1088,
+        16
+      ],
+      "webhookId": "27bc4789-cf68-400d-935a-2ec46dffaa6c"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Standardize trigger payload: button tap (decision) or chat command\nconst u = $input.first().json;\nif (u.callback_query) {\n  const [pairId, decision] = String(u.callback_query.data || '').split('|');\n  return [{ json: {\n    kind: 'decision',\n    chat_id: u.callback_query.message.chat.id,\n    query_id: u.callback_query.id,\n    pair_id: Number(pairId),\n    decision: decision || 'SKIP',\n  }}];\n}\nreturn [{ json: {\n  kind: 'command',\n  chat_id: u.message.chat.id,\n  text: (u.message.text || '').trim(),\n}}];"
+      },
+      "id": "norm",
+      "name": "Normalize Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.kind === 'decision' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "isdec",
+      "name": "Is Decision?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $('Normalize Update').first().json.query_id }}",
+        "additionalFields": {
+          "text": "={{ 'Saved: ' + $('Normalize Update').first().json.decision }}"
+        }
+      },
+      "id": "ack",
+      "name": "Ack Button",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -336,
+        -160
+      ],
+      "webhookId": "d6b86504-9684-41e7-8f54-176def8a1e2a",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "kyjcN3233zocREtV",
+          "cachedResultName": "hitl_review_queue"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "pair_id",
+              "keyValue": "={{ $('Normalize Update').first().json.pair_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "decision": "={{ $('Normalize Update').first().json.decision }}",
+            "status": "done"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save",
+      "name": "Save Decision",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -128,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "kyjcN3233zocREtV",
+          "cachedResultName": "hitl_review_queue"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "keyValue": "pending"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "id": "next",
+      "name": "Get Next Pair",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        128,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Normalize Update').first().json;\nconst rows = $input.all().filter(i => i.json && i.json.pair_id !== undefined);\nif (rows.length === 0) {\n  return [{ json: { has_pending: false, chat_id: ctx.chat_id,\n    message_text: '✅ Review queue is empty — every uncertain pair has been resolved. The mapping tables are up to date.' }}];\n}\nconst r = rows[0].json;\nconst lines = [\n  `🔍 *Entity review* — ${r.entity}`,\n  '',\n  `A: ${r.raw_a}`,\n  `B: ${r.raw_b}`,\n  '',\n  `model score: ${Number(r.score).toFixed(2)}   |   revenue at stake: EGP ${Number(r.impact_egp).toLocaleString()}`,\n];\nif (r.suggestion) lines.push(`💡 price evidence: *${r.suggestion}*`);\nlines.push('', 'Same real-world entity?');\nreturn [{ json: { has_pending: true, chat_id: ctx.chat_id, pair_id: r.pair_id,\n  message_text: lines.join('\\n') }}];"
+      },
+      "id": "compose",
+      "name": "Compose Review Card",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.has_pending === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "haspending",
+      "name": "Has Pending?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": {
+          "__rl": true,
+          "value": "={{ $json.chat_id }}",
+          "mode": "expression"
+        },
+        "text": "={{ $json.message_text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Merge",
+                    "additionalFields": {
+                      "callback_data": "={{ $json.pair_id }}|MERGE"
+                    }
+                  },
+                  {
+                    "text": "❌ Separate",
+                    "additionalFields": {
+                      "callback_data": "={{ $json.pair_id }}|SEPARATE"
+                    }
+                  },
+                  {
+                    "text": "⏭ Skip",
+                    "additionalFields": {
+                      "callback_data": "={{ $json.pair_id }}|SKIP"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "sendcard",
+      "name": "Send Review Card",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        -128
+      ],
+      "webhookId": "2d342d65-7f5a-4b7b-b174-f62093e6dd59",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": {
+          "__rl": true,
+          "value": "={{ $json.chat_id }}",
+          "mode": "expression"
+        },
+        "text": "={{ $json.message_text }}",
+        "additionalFields": {}
+      },
+      "id": "senddone",
+      "name": "Send Queue Empty",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        128
+      ],
+      "webhookId": "de14ccbf-2313-4fb7-a5b0-e829a54d39f9",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Update": {
+      "main": [
+        [
+          {
+            "node": "Is Decision?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Decision?": {
+      "main": [
+        [
+          {
+            "node": "Ack Button",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Next Pair",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Button": {
+      "main": [
+        [
+          {
+            "node": "Save Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Decision": {
+      "main": [
+        [
+          {
+            "node": "Get Next Pair",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Next Pair": {
+      "main": [
+        [
+          {
+            "node": "Compose Review Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Review Card": {
+      "main": [
+        [
+          {
+            "node": "Has Pending?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pending?": {
+      "main": [
+        [
+          {
+            "node": "Send Review Card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Queue Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
