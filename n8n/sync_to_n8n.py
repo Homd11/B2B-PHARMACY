@@ -1,13 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-sync_to_n8n.py — push pipeline outputs (HITL queue, alerts, KPIs) to n8n Data Tables.
-Run after re-running the notebooks. Credentials stay in environment variables.
 
-Usage:
-  export N8N_URL="https://scrapersaas.systems"
-  export N8N_API_KEY="...your n8n API key (Settings -> n8n API)..."
-  python sync_to_n8n.py
-"""
 import os, sys, json
 import requests
 import pandas as pd
@@ -19,7 +10,7 @@ if not N8N_URL or not API_KEY:
 
 H = {"X-N8N-API-KEY": API_KEY, "Content-Type": "application/json"}
 
-TABLES = {  # name -> id (from the instance)
+TABLES = {  
     "hitl_review_queue":   "kyjcN3233zocREtV",
     "supplier_week_alerts": "rT6fhLh8agn1GXFe",
     "kpi_summary":          "hKUWaP8Toekwb2Xz",
@@ -42,7 +33,6 @@ def insert(table_id, rows, batch=50):
             json={"data": rows[i:i+batch], "returnType": "count"})
 
 def main():
-    # ---- HITL queue (top 150 by impact; decided pairs kept) ----
     hq = pd.read_csv("hitl_queue.csv")
     hq["impact_egp"] = hq["impact_egp"].fillna(0)
     hq["suggestion"] = hq.apply(
